@@ -10,11 +10,14 @@ let package = Package(
         .executable(name: "VoicePOC", targets: ["VoicePOC"]),
     ],
     dependencies: [
-        // populated in Task 2
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
     ],
     targets: [
         .executableTarget(
             name: "VoicePOC",
+            dependencies: [
+                .product(name: "Logging", package: "swift-log"),
+            ],
             path: "Sources/VoicePOC"
         ),
         .testTarget(
