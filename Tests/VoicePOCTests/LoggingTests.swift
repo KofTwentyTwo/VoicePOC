@@ -3,11 +3,11 @@ import XCTest
 
 final class LoggingTests: XCTestCase {
     func testRedactReturnsLengthNotContent() {
-        let result = Logging.redact("the secret transcript text")
+        let result = Log.redact("the secret transcript text")
         XCTAssertEqual(result, "redacted, len=26")
     }
 
     func testRedactEmptyString() {
-        XCTAssertEqual(Logging.redact(""), "redacted, len=0")
+        XCTAssertEqual(Log.redact(""), "redacted, len=0")
     }
 }

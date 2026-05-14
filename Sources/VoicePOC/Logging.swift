@@ -10,7 +10,7 @@ import Logging
 ///
 /// **Invariant:** transcript text is never logged. Callers MUST pass transcript strings
 /// through `Logging.redact(_:)` before logging.
-public enum Logging {
+public enum Log {
     public static let state = Logger(label: "voicepoc.state")
     public static let audio = Logger(label: "voicepoc.audio")
     public static let perf  = Logger(label: "voicepoc.perf")
