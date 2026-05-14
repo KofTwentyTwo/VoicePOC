@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+Resources/models/openWakeWord/*.onnx
+Resources/models/silero/*.onnx
+~/Library/Caches/VoicePOC/
+.DS_Store
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+build/
