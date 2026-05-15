@@ -11,19 +11,22 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
+        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager.git", from: "1.20.0"),
     ],
     targets: [
         .executableTarget(
             name: "VoicePOC",
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
             ],
             path: "Sources/VoicePOC"
         ),
         .testTarget(
             name: "VoicePOCTests",
             dependencies: ["VoicePOC"],
-            path: "Tests/VoicePOCTests"
+            path: "Tests/VoicePOCTests",
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
