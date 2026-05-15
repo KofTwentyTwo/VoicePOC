@@ -1,5 +1,6 @@
 .build/
 .swiftpm/
+.claude/
 Resources/models/openWakeWord/*.onnx
 Resources/models/silero/*.onnx
 ~/Library/Caches/VoicePOC/
