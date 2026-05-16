@@ -65,7 +65,11 @@ public final class AudioCapture {
         Log.audio.info("input format: \(inputFormat.description)")
 
         // Tap at the input's native rate, then convert to 16 kHz mono in the tap.
+        // Use maximum-quality mastering resampler so the 48→16 downsample preserves
+        // as much speech detail as possible (matters for wake-word inference).
         let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        converter?.sampleRateConverterQuality = .max
+        converter?.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Mastering
         input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
             let outBuffer = AVAudioPCMBuffer(

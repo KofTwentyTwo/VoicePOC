@@ -6,10 +6,13 @@ public struct HeyJarvisModel {
     public let embeddingURL: URL
     public let classifierURL: URL
 
-    public init(modelsDirectory: URL = URL(fileURLWithPath: "Resources/models/openWakeWord")) throws {
+    public init(
+        modelsDirectory: URL = URL(fileURLWithPath: "Resources/models/openWakeWord"),
+        classifierFilename: String = "hey_jarvis_v0.1.onnx"
+    ) throws {
         self.melspectrogramURL = modelsDirectory.appending(path: "melspectrogram.onnx")
         self.embeddingURL      = modelsDirectory.appending(path: "embedding_model.onnx")
-        self.classifierURL     = modelsDirectory.appending(path: "hey_jarvis_v0.1.onnx")
+        self.classifierURL     = modelsDirectory.appending(path: classifierFilename)
 
         for url in [melspectrogramURL, embeddingURL, classifierURL] {
             guard FileManager.default.fileExists(atPath: url.path) else {
