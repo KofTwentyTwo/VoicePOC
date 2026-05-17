@@ -8,17 +8,68 @@ import Logging
 /// consume one at a time. Only one consumer should be iterating `buffers` at any
 /// moment; transitions between stages cancel the current iterator.
 public final class AudioCapture: @unchecked Sendable {
-    public let buffers: AsyncStream<AVAudioPCMBuffer>
+    /// A fresh AsyncStream subscription. Each call returns a new stream — the
+    /// underlying audio tap fans out to every active subscription. This lets
+    /// multiple consumers (e.g., ConversationCoordinator opening a new
+    /// "captureUtterance" loop per turn) each get their own iterator.
+    ///
+    /// Older buffers are NOT replayed; subscribers only receive buffers
+    /// produced after their subscription started.
+    public var buffers: AsyncStream<AVAudioPCMBuffer> {
+        AsyncStream { continuation in
+            let id = self.addContinuation(continuation)
+            continuation.onTermination = { [weak self] _ in
+                self?.removeContinuation(id: id)
+            }
+        }
+    }
 
     private let engine = AVAudioEngine()
-    private let continuation: AsyncStream<AVAudioPCMBuffer>.Continuation
     private let targetFormat: AVAudioFormat
 
-    public init() throws {
-        var cont: AsyncStream<AVAudioPCMBuffer>.Continuation!
-        self.buffers = AsyncStream { c in cont = c }
-        self.continuation = cont
+    // Multi-consumer fan-out state.
+    private let lock = NSLock()
+    private var nextSubscriberID: Int = 0
+    private var continuations: [Int: AsyncStream<AVAudioPCMBuffer>.Continuation] = [:]
 
+    private func addContinuation(_ c: AsyncStream<AVAudioPCMBuffer>.Continuation) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        nextSubscriberID += 1
+        let id = nextSubscriberID
+        continuations[id] = c
+        return id
+    }
+
+    private func removeContinuation(id: Int) {
+        lock.lock(); defer { lock.unlock() }
+        continuations.removeValue(forKey: id)
+    }
+
+    private func broadcast(_ buffer: AVAudioPCMBuffer) {
+        // AVAudioPCMBuffer isn't Sendable in Swift 6, but in this code path
+        // the buffer is freshly produced by the converter inside the tap
+        // closure and is not mutated after this point. Wrap in an unsafe-
+        // Sendable box so the AsyncStream yield is allowed by the strict
+        // concurrency checker.
+        struct UnsafeSendableBuffer: @unchecked Sendable { let buf: AVAudioPCMBuffer }
+        let boxed = UnsafeSendableBuffer(buf: buffer)
+        lock.lock()
+        let snapshot = Array(continuations.values)
+        lock.unlock()
+        for c in snapshot {
+            c.yield(boxed.buf)
+        }
+    }
+
+    private func finishAll() {
+        lock.lock()
+        let snapshot = Array(continuations.values)
+        continuations.removeAll()
+        lock.unlock()
+        for c in snapshot { c.finish() }
+    }
+
+    public init() throws {
         // Target format: 16 kHz mono Float32 — what openWakeWord and Silero want.
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -85,7 +136,7 @@ public final class AudioCapture: @unchecked Sendable {
                 Log.audio.error("conversion error: \(error.localizedDescription)")
                 return
             }
-            self.continuation.yield(outBuffer)
+            self.broadcast(outBuffer)
         }
 
         engine.prepare()
@@ -96,7 +147,7 @@ public final class AudioCapture: @unchecked Sendable {
     public func stop() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        continuation.finish()
+        finishAll()
         Log.audio.info("audio engine stopped")
     }
 }

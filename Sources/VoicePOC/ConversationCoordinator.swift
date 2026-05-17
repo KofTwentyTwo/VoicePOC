@@ -274,12 +274,20 @@ public actor ConversationCoordinator {
         var consecutiveSilenceFrames = 0
         let silenceFramesForEndOfTurn = max(1, endOfTurnSilenceMs / vadFrameMs)
         let utteranceStarted = Date()
+        var bufferCount = 0
+        let loopStart = Date()
+
+        Log.audio.info("captureUtterance: started, awaiting buffers (timeout=\(sessionIdleTimeoutSec)s)")
 
         for await buffer in capture.buffers {
             if Task.isCancelled || state == .idle { throw CancellationError() }
             guard let ptr = buffer.floatChannelData?[0] else { continue }
             let n = Int(buffer.frameLength)
             if n == 0 { continue }
+            bufferCount += 1
+            if bufferCount == 1 {
+                Log.audio.info("captureUtterance: first buffer arrived after \(Int(Date().timeIntervalSince(loopStart) * 1000)) ms (n=\(n) samples)")
+            }
 
             let block = Array(UnsafeBufferPointer(start: ptr, count: n))
             utterance.append(contentsOf: block)
@@ -309,10 +317,14 @@ public actor ConversationCoordinator {
 
             // Pre-speech idle timeout: no speech detected within N seconds.
             if !heardSpeech, Date().timeIntervalSince(utteranceStarted) >= sessionIdleTimeoutSec {
+                Log.audio.info("captureUtterance: idle timeout after \(bufferCount) buffers, \(utterance.count) samples")
                 return nil
             }
         }
-        // Audio stream ended — treat as end-of-utterance if we heard anything.
+        // Audio stream ended (continuation finished) — different from idle
+        // timeout. Means AudioCapture's AsyncStream got finish()'d or no one
+        // is yielding to it anymore.
+        Log.audio.warning("captureUtterance: stream ENDED after \(bufferCount) buffers in \(Int(Date().timeIntervalSince(loopStart) * 1000)) ms (heardSpeech=\(heardSpeech))")
         return heardSpeech ? utterance : nil
     }
 }
