@@ -19,7 +19,7 @@ import OnnxRuntimeBindings
 /// Silero v6 VAD note: the model uses an STFT-based architecture. On macOS TTS
 /// audio (e.g., `say -v Karen`) it typically peaks at 0.2–0.3; real microphone
 /// speech typically exceeds 0.5.
-public final class SileroVAD {
+public final class SileroVAD: @unchecked Sendable {
 
     /// Errors specific to SileroVAD operations.
     public enum SileroError: Error {

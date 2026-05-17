@@ -7,7 +7,7 @@ import Logging
 /// Push model: buffers are placed onto an `AsyncStream` that downstream stages
 /// consume one at a time. Only one consumer should be iterating `buffers` at any
 /// moment; transitions between stages cancel the current iterator.
-public final class AudioCapture {
+public final class AudioCapture: @unchecked Sendable {
     public let buffers: AsyncStream<AVAudioPCMBuffer>
 
     private let engine = AVAudioEngine()

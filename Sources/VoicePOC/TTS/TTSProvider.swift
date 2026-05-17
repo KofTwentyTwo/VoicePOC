@@ -6,4 +6,12 @@ import Foundation
 /// Streaming providers should resolve only after the final audio chunk has flushed.
 public protocol TTSProvider: Sendable {
     func speak(_ text: String) async throws
+
+    /// Stop any in-flight speech. The pending `speak(_:)` should throw `CancellationError`.
+    /// Implementations may make this a no-op if cancellation isn't supported.
+    func cancel()
+}
+
+extension TTSProvider {
+    public func cancel() {}
 }
