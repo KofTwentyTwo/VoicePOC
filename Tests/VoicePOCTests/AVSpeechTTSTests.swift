@@ -1,5 +1,5 @@
 import XCTest
-@testable import VoicePOC
+@testable import VoicePOCKit
 
 final class AVSpeechTTSTests: XCTestCase {
     /// Conforms to the protocol — compile-time check.

@@ -1,6 +1,6 @@
 import XCTest
 import AVFoundation
-@testable import VoicePOC
+@testable import VoicePOCKit
 
 final class WhisperKitSTTTests: XCTestCase {
     func testTranscribesHeyJarvisClipFixture() async throws {

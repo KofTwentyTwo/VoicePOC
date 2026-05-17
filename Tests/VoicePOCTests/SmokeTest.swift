@@ -1,5 +1,5 @@
 import XCTest
-@testable import VoicePOC
+@testable import VoicePOCKit
 
 final class SmokeTest: XCTestCase {
     func testPackageBuilds() {

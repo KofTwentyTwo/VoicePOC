@@ -1,10 +1,11 @@
 .build/
-.swiftpm/
 .claude/
-Resources/models/openWakeWord/*.onnx
-Resources/models/silero/*.onnx
-~/Library/Caches/VoicePOC/
 .DS_Store
+.swiftpm/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
+~/Library/Caches/VoicePOC/
 build/
+Resources/models/openWakeWord/*.onnx
+Resources/models/silero/*.onnx
+VoicePOC.xcodeproj/

@@ -1,5 +1,5 @@
 import XCTest
-@testable import VoicePOC
+@testable import VoicePOCKit
 
 final class OllamaClientTests: XCTestCase {
     /// Most tests are integration tests requiring Ollama running locally.

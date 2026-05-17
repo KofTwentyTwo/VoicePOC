@@ -44,8 +44,15 @@ public actor ConversationCoordinator {
     private var conversationTask: Task<Void, Never>?
     private var activeStateTokens: Int = 0               // for streamed-token status
     private var lastUtteranceTextLen: Int = 0
+    private var lastUtteranceText: String = ""           // most recent transcript (HUD caption)
+    private var lastResponseText: String = ""            // most recent JARVIS reply (HUD caption)
     private var listeningStartedAt: Date?                // for status line
     private var firstSpeechFrameAt: Date?                // for status line
+
+    /// Most recent (user utterance, assistant response) pair — for HUD display.
+    public func lastTexts() -> (String, String) {
+        (lastUtteranceText, lastResponseText)
+    }
 
     // MARK: - Init
 
@@ -190,6 +197,7 @@ public actor ConversationCoordinator {
             }
 
             setLastTranscriptLen(transcript.count)
+            lastUtteranceText = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
 
             let cleaned = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.isEmpty {
@@ -231,6 +239,7 @@ public actor ConversationCoordinator {
                 continue
             }
             history.append(OllamaClient.Message(role: "assistant", content: response))
+            lastResponseText = response
 
             // 4. Speak.
             if Task.isCancelled || state == .idle { return }

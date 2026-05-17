@@ -1,6 +1,6 @@
 import XCTest
 import AVFoundation
-@testable import VoicePOC
+@testable import VoicePOCKit
 
 final class AudioCaptureTests: XCTestCase {
     func testAudioCaptureExposesAsyncStream() async throws {

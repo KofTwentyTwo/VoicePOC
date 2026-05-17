@@ -1,0 +1,61 @@
+name: VoicePOC
+options:
+  bundleIdPrefix: com.dmdbrands
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    ALWAYS_SEARCH_USER_PATHS: NO
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+# Local Swift package providing the VoicePOCKit library.
+# The .app target depends on VoicePOCKit declared in Package.swift.
+packages:
+  VoicePOCKitPackage:
+    path: .
+
+targets:
+  VoicePOCApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/App
+    dependencies:
+      - package: VoicePOCKitPackage
+        product: VoicePOCKit
+    info:
+      path: Sources/App/Info.plist
+      properties:
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleDisplayName: VoicePOC
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundlePackageType: APPL
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHighResolutionCapable: true
+        NSPrincipalClass: NSApplication
+        # Background-only app, but with a visible borderless HUD window.
+        # LSUIElement keeps us out of the Dock and ⌘-tab list.
+        LSUIElement: true
+        # Permissions: microphone for the conversation, accessibility for the
+        # global F1 hotkey.
+        NSMicrophoneUsageDescription: "VoicePOC uses the microphone for voice conversation with the local JARVIS assistant."
+        NSSpeechRecognitionUsageDescription: "VoicePOC transcribes speech locally via WhisperKit."
+        # Required for NSEvent global key monitor in some macOS versions.
+        NSAppleEventsUsageDescription: "VoicePOC listens for the F1 hotkey."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dmdbrands.VoicePOC
+        PRODUCT_NAME: VoicePOC
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        ENABLE_HARDENED_RUNTIME: NO

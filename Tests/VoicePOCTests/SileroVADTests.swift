@@ -1,6 +1,6 @@
 import XCTest
 import AVFoundation
-@testable import VoicePOC
+@testable import VoicePOCKit
 
 final class SileroVADTests: XCTestCase {
     func testInitializerLoadsWithoutError() throws {

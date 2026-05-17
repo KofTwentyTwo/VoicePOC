@@ -1,6 +1,6 @@
 import XCTest
 import AVFoundation
-@testable import VoicePOC
+@testable import VoicePOCKit
 
 final class WakeWordTests: XCTestCase {
     // Skip these tests if fixtures aren't recorded yet — the orchestrator

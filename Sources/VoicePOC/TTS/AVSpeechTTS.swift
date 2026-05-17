@@ -15,6 +15,17 @@ public final class AVSpeechTTS: NSObject, TTSProvider, @preconcurrency AVSpeechS
     private var continuation: CheckedContinuation<Void, Error>?
     public let voice: AVSpeechSynthesisVoice
 
+    /// Called on each spoken-word delegate callback while TTS is active.
+    /// Used by the HUD to animate mouth/orb intensity in sync with speech.
+    /// Callback runs on the main thread.
+    public var onSpeakingPulse: (@MainActor @Sendable () -> Void)?
+
+    /// Called when an utterance begins. Useful for HUD state to enter "speaking".
+    public var onSpeakingStart: (@MainActor @Sendable () -> Void)?
+
+    /// Called when an utterance finishes (normally or via cancel).
+    public var onSpeakingEnd: (@MainActor @Sendable () -> Void)?
+
     public override init() {
         let voices = AVSpeechSynthesisVoice.speechVoices()
         let premium = voices.first { $0.language.hasPrefix("en") && $0.quality == .premium }
@@ -47,12 +58,33 @@ public final class AVSpeechTTS: NSObject, TTSProvider, @preconcurrency AVSpeechS
 
     // MARK: AVSpeechSynthesizerDelegate
 
+    public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        if let cb = onSpeakingStart {
+            Task { @MainActor in cb() }
+        }
+    }
+
+    public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
+                                  willSpeakRangeOfSpeechString characterRange: NSRange,
+                                  utterance: AVSpeechUtterance) {
+        // Fires for each word boundary — perfect mouth/orb pulse driver.
+        if let cb = onSpeakingPulse {
+            Task { @MainActor in cb() }
+        }
+    }
+
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        if let cb = onSpeakingEnd {
+            Task { @MainActor in cb() }
+        }
         continuation?.resume(returning: ())
         continuation = nil
     }
 
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        if let cb = onSpeakingEnd {
+            Task { @MainActor in cb() }
+        }
         continuation?.resume(throwing: CancellationError())
         continuation = nil
     }
