@@ -1,25 +1,19 @@
 import Cocoa
 import AVFoundation
+import SwiftUI
 import VoicePOCKit
 
-/// VoicePOC's NSApplication delegate.
+/// VoicePOC NSApplicationDelegate.
 ///
-/// Owns the long-lived components (AudioCapture, STT, VAD, Ollama, TTS) and
-/// the ConversationCoordinator that stitches them together. Wires up the
-/// global F1 hotkey, the menu-bar status item (Quit only for now), and the
-/// boot banner.
-///
-/// All blocking initialization happens inside a `Task` from
-/// `applicationDidFinishLaunching` so the AppKit run loop is already pumping
-/// before we touch AVSpeech / WhisperKit / Ollama. This avoids deadlocks
-/// where a callback would have nowhere to deliver.
+/// Owns the long-lived components (AudioCapture, STT, VAD, Ollama, TTS,
+/// ConversationCoordinator), the global F1 hotkey, the main visible window
+/// (HUD orb + live status panel), the menu bar, and the log-stream
+/// secondary window. Mirrors VisionPOC's AppDelegate pattern.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    // Hotkey
+    // Hotkey / tuning
     private let defaultHotkeyKeyCode: UInt16 = 122          // F1
-
-    // Conversation tuning
     private let endOfTurnSilenceMs = 800
     private let sessionIdleTimeoutSec: Double = 10
 
@@ -27,23 +21,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var capture: AudioCapture?
     private var coordinator: ConversationCoordinator?
     private var hotkey: HotkeyMonitor?
-    private var statusItem: NSStatusItem?
 
-    // HUD
+    // UI
     private let hudState = JarvisHUDState()
-    private lazy var hudWindow = JarvisHUDWindowController(state: hudState)
+    private var mainWindow: JarvisMainWindowController?
+    private var logWindow: LogStreamWindowController?
     private var intensityDecayTimer: Timer?
-
     private var bootTask: Task<Void, Never>?
 
-    // MARK: - NSApplicationDelegate
+    // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        printBootHeader()
-        installStatusItem()
-        hudWindow.show()
+        // Bootstrap the file mirror for the LogStream so `tail -f
+        // /tmp/voicepoc.log` works even when launched from Finder.
+        LogStream.bootstrapFile()
+        LogStream.shared.log("VoicePOC starting up", source: .app)
+
+        installMainMenu()
+        showMainWindow()
         startIntensityDecay()
         startBootTask()
+
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Don't quit when the user closes the window — keep the conversation
+        // running. Quit comes from ⌘Q.
+        false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -52,70 +57,116 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         capture?.stop()
     }
 
-    // MARK: - Boot
+    // MARK: - UI
 
-    private func printBootHeader() {
-        let defaultInput = AVCaptureDevice.default(for: .audio)
-        let deviceName = defaultInput?.localizedName ?? "(unknown)"
-        print("───────────────────────────────────────────────────────────────────────")
-        print("  VoicePOC v0.1  —  local conversation (Path 3) — .app bundle")
-        print("───────────────────────────────────────────────────────────────────────")
-        print("  Audio input device : \(deviceName)")
-        print("  Target format      : 1 ch, 16 kHz, Float32 (converted in tap @ max quality)")
-        print("  Hotkey             : F1 (keyCode \(defaultHotkeyKeyCode))   — also: menu bar 🎙 menu")
-        print("  End-of-turn        : \(endOfTurnSilenceMs) ms silence (VAD)")
-        print("  Idle timeout       : \(Int(sessionIdleTimeoutSec)) s no-speech → idle")
-        print("───────────────────────────────────────────────────────────────────────")
-        print()
+    private func showMainWindow() {
+        let controller = JarvisMainWindowController(state: hudState)
+        controller.showWindow(nil)
+        self.mainWindow = controller
     }
+
+    @objc private func showLogStreamWindow() {
+        if logWindow == nil {
+            logWindow = LogStreamWindowController()
+        }
+        logWindow?.showWindow(nil)
+        logWindow?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func toggleConversation() {
+        guard let coord = coordinator else { return }
+        Task { await coord.toggle() }
+    }
+
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+        let appName = ProcessInfo.processInfo.processName
+
+        // ── Application menu ───────────────────────────────────────────────
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "About \(appName)", action: nil, keyEquivalent: ""))
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: "Hide \(appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+        appMenu.addItem(NSMenuItem(title: "Quit \(appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        // ── Conversation menu ──────────────────────────────────────────────
+        let convoItem = NSMenuItem()
+        let convoMenu = NSMenu(title: "Conversation")
+        let toggleItem = NSMenuItem(title: "Toggle Conversation", action: #selector(toggleConversation), keyEquivalent: "")
+        toggleItem.target = self
+        convoMenu.addItem(toggleItem)
+        convoItem.submenu = convoMenu
+        mainMenu.addItem(convoItem)
+
+        // ── View menu ──────────────────────────────────────────────────────
+        let viewItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        let logItem = NSMenuItem(title: "Log Stream", action: #selector(showLogStreamWindow), keyEquivalent: "l")
+        logItem.target = self
+        viewMenu.addItem(logItem)
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+
+        // ── Window menu ────────────────────────────────────────────────────
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
+
+        NSApp.mainMenu = mainMenu
+        NSApp.windowsMenu = windowMenu
+    }
+
+    // MARK: - Boot
 
     private func startBootTask() {
         bootTask = Task { [weak self] in
             do {
                 try await self?.boot()
             } catch {
-                Log.state.error("boot failed: \(error.localizedDescription)")
-                print("  [boot] FAILED: \(error.localizedDescription)")
+                LogStream.shared.log("boot failed: \(error.localizedDescription)", level: .error, source: .app)
             }
         }
     }
 
     private func boot() async throws {
-        print("  [init] AudioCapture …")
+        LogStream.shared.log("init: AudioCapture …", source: .app)
         let cap = try AudioCapture()
         try await cap.requestMicrophoneAuthorization()
         try cap.start()
         self.capture = cap
-        print("  [init] AudioCapture ✓")
+        LogStream.shared.log("init: AudioCapture ✓", source: .app)
 
-        print("  [init] SileroVAD …")
+        LogStream.shared.log("init: SileroVAD …", source: .app)
         let vad = try SileroVAD()
-        print("  [init] SileroVAD ✓")
+        LogStream.shared.log("init: SileroVAD ✓", source: .app)
 
-        print("  [init] WhisperKit (downloading on first run, ~150 MB; may take ~30 s) …")
+        LogStream.shared.log("init: WhisperKit (downloading on first run, ~150 MB) …", source: .app)
         let stt = try await WhisperKitSTT()
-        print("  [init] WhisperKit ✓ (model=\(stt.modelName))")
+        LogStream.shared.log("init: WhisperKit ✓ (model=\(stt.modelName))", source: .app)
 
-        print("  [init] OllamaClient …")
+        LogStream.shared.log("init: OllamaClient …", source: .app)
         let ollama = OllamaClient()
         let ollamaUp = (try? await ollama.healthCheck()) ?? false
         if ollamaUp {
-            print("  [init] Ollama ✓ (gemma4:latest reachable)")
+            LogStream.shared.log("init: Ollama ✓ (gemma4:latest reachable)", source: .app)
         } else {
-            print("  [init] Ollama ✗  — install / start / pull gemma4:latest; loop will fail at .thinking")
+            LogStream.shared.log("init: Ollama ✗ — install + start + pull gemma4:latest; conversation will fail at .thinking", level: .warn, source: .app)
         }
 
-        print("  [init] AVSpeechTTS …")
+        LogStream.shared.log("init: AVSpeechTTS …", source: .app)
         let tts = AVSpeechTTS()
-        // Wire HUD pulse hooks: each spoken word bumps intensity, decay timer
-        // pulls it back down so the orb gently breathes between words.
         tts.onSpeakingStart = { [weak self] in self?.hudState.intensity = 0.9 }
         tts.onSpeakingPulse = { [weak self] in
-            // Bump intensity per word; clamp 0..1.
             self?.hudState.intensity = min(1.0, (self?.hudState.intensity ?? 0) + 0.55)
         }
         tts.onSpeakingEnd = { [weak self] in self?.hudState.intensity = 0 }
-        print("  [init] AVSpeechTTS ✓ (voice='\(tts.voice.name)')")
+        LogStream.shared.log("init: AVSpeechTTS ✓ (voice='\(tts.voice.name)')", source: .app)
 
         let coord = ConversationCoordinator(
             capture: cap,
@@ -128,35 +179,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.coordinator = coord
 
-        // Hotkey: capture coord weakly so AppDelegate stays the owner.
+        // Forward live observability data to the HUD state on main actor.
+        await coord.setObservers(
+            onRMS: { [weak self] rms in
+                Task { @MainActor [weak self] in self?.hudState.micRMS = rms }
+            },
+            onVAD: { [weak self] prob in
+                Task { @MainActor [weak self] in self?.hudState.vadProbability = prob }
+            },
+            onTranscript: { [weak self] text in
+                Task { @MainActor [weak self] in self?.hudState.lastUtterance = text }
+            },
+            onLLMProgress: { [weak self] count, partial in
+                Task { @MainActor [weak self] in
+                    self?.hudState.streamingTokenCount = count
+                    self?.hudState.lastResponse = partial
+                }
+            },
+            onLLMResponse: { [weak self] text in
+                Task { @MainActor [weak self] in self?.hudState.lastResponse = text }
+            }
+        )
+
         let hk = HotkeyMonitor(keyCode: defaultHotkeyKeyCode) { [weak coord] in
+            LogStream.shared.log("F1 pressed", source: .app)
             guard let coord else { return }
             Task { await coord.toggle() }
         }
         hk.start()
         self.hotkey = hk
 
-        print()
-        print("  [boot] speaking startup banner …")
-        try? await tts.speak("Voice POC ready. Press F1 to start a conversation.")
-        print("  [boot] ✓")
-        print()
-        print("  Ready. Press F1 anywhere on your Mac to start talking.")
-        print("  Use the 🎙 menu-bar item (or Cmd-Q in a focused app) to quit.")
-        print()
+        LogStream.shared.log("boot complete — press F1 (or Conversation → Toggle Conversation) to talk", source: .app)
+        try? await tts.speak("Voice POC ready. Press F1 to talk.")
 
-        // Status renderer — refreshes ~4 Hz, mirrors coordinator state to the
-        // HUD and prints a one-line console status for the terminal observer.
-        let statusRenderer = Task { [weak self, weak coord] in
-            let interval = UInt64(250_000_000)
-            var spinIdx = 0
-            let spin = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+        // Mirror coordinator state into the HUD state at 4 Hz so the orb
+        // and meters know what mode we're in.
+        let stateMirror = Task { [weak self, weak coord] in
             while !Task.isCancelled, let coord {
-                try? await Task.sleep(nanoseconds: interval)
+                try? await Task.sleep(nanoseconds: 250_000_000)
                 let s = await coord.status()
-                spinIdx = (spinIdx + 1) % spin.count
-
-                // Mirror to HUD on main actor.
                 let mode: JarvisHUDState.Mode = {
                     switch s.state {
                     case .idle:      return .idle
@@ -167,84 +228,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }()
                 let elapsed = s.listeningElapsedSec ?? 0
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.hudState.setMode(mode)
-                    self.hudState.listeningElapsed = elapsed
-                }
-
-                let line: String
-                switch s.state {
-                case .idle:
-                    line = "  idle      — press F1 anywhere to talk"
-                case .listening:
-                    let phase = s.speechDetected ? "speech" : "waiting"
-                    line = String(format: "  %@ listening  (%.1fs, %@)", spin[spinIdx], elapsed, phase)
-                case .thinking:
-                    line = "  \(spin[spinIdx]) thinking   (asking gemma4:latest …)"
-                case .speaking:
-                    line = "  \(spin[spinIdx]) speaking   (\(s.streamedTokens) chunks; last len=\(s.lastTranscriptLen))"
-                }
-                print("\u{001B}[2K\r" + line, terminator: "")
-                fflush(stdout)
-            }
-        }
-        _ = statusRenderer
-
-        // Mirror transcript + response strings to the HUD as they're observed
-        // by the coordinator. We piggyback on the coordinator's existing
-        // status() snapshot; for the actual text we need a separate hook.
-        // Simpler path: coordinator publishes events via the existing logger,
-        // and we capture them by adding tiny accessors on the coordinator.
-        startTextRefresher(coord: coord)
-    }
-
-    /// Refreshes HUD's caption strings by polling the coordinator's most
-    /// recent transcript and response. Cheap; runs at 4 Hz next to the
-    /// status renderer.
-    private func startTextRefresher(coord: ConversationCoordinator) {
-        Task { [weak self, weak coord] in
-            while !Task.isCancelled, let coord {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                let (utt, resp) = await coord.lastTexts()
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    if !utt.isEmpty { self.hudState.lastUtterance = utt }
-                    if !resp.isEmpty { self.hudState.lastResponse = resp }
+                    self?.hudState.setMode(mode)
+                    self?.hudState.listeningElapsed = elapsed
                 }
             }
         }
+        _ = stateMirror
     }
 
-    /// Decays HUD orb intensity gently between TTS word-pulse bumps so the
-    /// orb breathes naturally instead of staying clamped to 1.0.
     private func startIntensityDecay() {
         intensityDecayTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             guard let self else { return }
-            // Only decay while speaking; other modes set intensity to 0 directly.
             if self.hudState.mode == .speaking {
                 self.hudState.intensity = max(0, self.hudState.intensity - 0.04)
             }
         }
-    }
-
-    // MARK: - Menu bar status item (Quit + manual toggle)
-
-    private func installStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "🎙"
-        let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Toggle conversation (F1)", action: #selector(toggleConversation(_:)), keyEquivalent: ""))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit VoicePOC", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        for it in menu.items where it.action == #selector(toggleConversation(_:)) {
-            it.target = self
-        }
-        item.menu = menu
-        self.statusItem = item
-    }
-
-    @objc private func toggleConversation(_ sender: Any?) {
-        guard let coord = coordinator else { return }
-        Task { await coord.toggle() }
     }
 }

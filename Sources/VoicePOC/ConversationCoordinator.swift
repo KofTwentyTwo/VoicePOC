@@ -33,6 +33,28 @@ public actor ConversationCoordinator {
     private let endOfTurnSilenceMs: Int
     private let sessionIdleTimeoutSec: Double
 
+    // Observability hooks. AppDelegate provides these to forward live data
+    // into the SwiftUI HUD state. Closures are called on the actor's executor.
+    private var onRMSUpdate: (@Sendable (Double) -> Void)?
+    private var onVADUpdate: (@Sendable (Float) -> Void)?
+    private var onTranscript: (@Sendable (String) -> Void)?
+    private var onLLMTokenStreamProgress: (@Sendable (Int, String) -> Void)?
+    private var onLLMResponse: (@Sendable (String) -> Void)?
+
+    public func setObservers(
+        onRMS: (@Sendable (Double) -> Void)? = nil,
+        onVAD: (@Sendable (Float) -> Void)? = nil,
+        onTranscript: (@Sendable (String) -> Void)? = nil,
+        onLLMProgress: (@Sendable (Int, String) -> Void)? = nil,
+        onLLMResponse: (@Sendable (String) -> Void)? = nil
+    ) {
+        self.onRMSUpdate = onRMS
+        self.onVADUpdate = onVAD
+        self.onTranscript = onTranscript
+        self.onLLMTokenStreamProgress = onLLMProgress
+        self.onLLMResponse = onLLMResponse
+    }
+
     // VAD frame math
     private let vadFrameSize = 512                       // samples
     private let vadFrameMs   = 32                        // ms per frame at 16 kHz
@@ -113,7 +135,7 @@ public actor ConversationCoordinator {
 
     private func startConversation() async {
         guard state == .idle else { return }
-        Log.state.info("state: idle → listening")
+        LogStream.shared.log("state: idle → listening (conversation started)", source: .state)
         history = [OllamaClient.Message(role: "system", content: systemPrompt)]
         vad.reset()
         transitionTo(.listening)
@@ -127,7 +149,7 @@ public actor ConversationCoordinator {
 
     private func endConversation(reason: String) async {
         guard state != .idle else { return }
-        Log.state.info("state: \(state.rawValue) → idle (reason: \(reason))")
+        LogStream.shared.log("state: \(state.rawValue) → idle (reason: \(reason))", source: .state)
         tts.cancel()
         conversationTask?.cancel()
         conversationTask = nil
@@ -179,25 +201,27 @@ public actor ConversationCoordinator {
             if Task.isCancelled || state == .idle { return }
 
             // 2. Transcribe.
-            Log.state.info("state: listening → thinking")
+            LogStream.shared.log("state: listening → thinking", source: .state)
             transitionTo(.thinking)
 
             let transcript: String
             do {
+                LogStream.shared.log("transcribing \(utteranceSamples.count) samples (\(String(format: "%.2f", Double(utteranceSamples.count) / 16_000.0))s) …", source: .stt)
                 let perfStart = Date()
                 transcript = try await stt.transcribeSamplesPublic(utteranceSamples)
                 let ms = Int(Date().timeIntervalSince(perfStart) * 1000)
-                Log.perf.info("stt: \(ms) ms, \(Log.redact(transcript))")
+                LogStream.shared.log("transcript (\(ms) ms): \"\(transcript)\"", source: .stt)
             } catch is CancellationError {
                 return
             } catch {
-                Log.state.error("conversation: STT failed: \(error.localizedDescription)")
+                LogStream.shared.log("STT failed: \(error.localizedDescription)", level: .error, source: .stt)
                 transitionTo(.listening)
                 continue
             }
 
             setLastTranscriptLen(transcript.count)
             lastUtteranceText = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            onTranscript?(lastUtteranceText)
 
             let cleaned = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.isEmpty {
@@ -210,6 +234,7 @@ public actor ConversationCoordinator {
             history.append(OllamaClient.Message(role: "user", content: cleaned))
             let response: String
             do {
+                LogStream.shared.log("asking gemma4:latest …", source: .llm)
                 let perfStart = Date()
                 var full = ""
                 var tokenCount = 0
@@ -218,15 +243,15 @@ public actor ConversationCoordinator {
                     full += chunk
                     tokenCount += 1
                     setStreamedTokens(tokenCount)
+                    onLLMTokenStreamProgress?(tokenCount, full)
                 }
                 let ms = Int(Date().timeIntervalSince(perfStart) * 1000)
                 response = full.trimmingCharacters(in: .whitespacesAndNewlines)
-                Log.perf.info("ollama: \(ms) ms, \(tokenCount) chunks, \(Log.redact(response))")
+                LogStream.shared.log("response (\(ms) ms, \(tokenCount) chunks): \"\(response)\"", source: .llm)
             } catch is CancellationError {
                 return
             } catch {
-                Log.state.error("conversation: Ollama failed: \(error.localizedDescription)")
-                // Drop the user message so history doesn't grow malformed.
+                LogStream.shared.log("Ollama failed: \(error.localizedDescription)", level: .error, source: .llm)
                 _ = history.popLast()
                 transitionTo(.listening)
                 continue
@@ -240,21 +265,24 @@ public actor ConversationCoordinator {
             }
             history.append(OllamaClient.Message(role: "assistant", content: response))
             lastResponseText = response
+            onLLMResponse?(response)
 
             // 4. Speak.
             if Task.isCancelled || state == .idle { return }
-            Log.state.info("state: thinking → speaking")
+            LogStream.shared.log("state: thinking → speaking", source: .state)
             transitionTo(.speaking)
             do {
+                LogStream.shared.log("speaking: \"\(response)\"", source: .tts)
                 try await tts.speak(response)
+                LogStream.shared.log("speech finished", source: .tts)
             } catch is CancellationError {
                 return
             } catch {
-                Log.state.error("conversation: TTS failed: \(error.localizedDescription)")
+                LogStream.shared.log("TTS failed: \(error.localizedDescription)", level: .error, source: .tts)
             }
 
             if Task.isCancelled || state == .idle { return }
-            Log.state.info("state: speaking → listening")
+            LogStream.shared.log("state: speaking → listening (next turn)", source: .state)
             transitionTo(.listening)
         }
     }
@@ -277,7 +305,7 @@ public actor ConversationCoordinator {
         var bufferCount = 0
         let loopStart = Date()
 
-        Log.audio.info("captureUtterance: started, awaiting buffers (timeout=\(sessionIdleTimeoutSec)s)")
+        LogStream.shared.log("captureUtterance: awaiting buffers (timeout=\(sessionIdleTimeoutSec)s)", source: .audio)
 
         for await buffer in capture.buffers {
             if Task.isCancelled || state == .idle { throw CancellationError() }
@@ -286,8 +314,14 @@ public actor ConversationCoordinator {
             if n == 0 { continue }
             bufferCount += 1
             if bufferCount == 1 {
-                Log.audio.info("captureUtterance: first buffer arrived after \(Int(Date().timeIntervalSince(loopStart) * 1000)) ms (n=\(n) samples)")
+                LogStream.shared.log("first audio buffer arrived after \(Int(Date().timeIntervalSince(loopStart) * 1000)) ms (n=\(n))", source: .audio)
             }
+
+            // Live RMS for the HUD meter.
+            var sumSq: Float = 0
+            for i in 0..<n { sumSq += ptr[i] * ptr[i] }
+            let rms = n > 0 ? sqrt(sumSq / Float(n)) : 0
+            onRMSUpdate?(Double(rms))
 
             let block = Array(UnsafeBufferPointer(start: ptr, count: n))
             utterance.append(contentsOf: block)
@@ -298,18 +332,19 @@ public actor ConversationCoordinator {
                 let frame = Array(vadPending.prefix(vadFrameSize))
                 vadPending.removeFirst(vadFrameSize)
                 let prob = (try? vad.probability(frame: frame)) ?? 0
+                onVADUpdate?(prob)
                 let isSpeech = prob >= 0.5
                 if isSpeech {
                     if !heardSpeech {
                         heardSpeech = true
                         markSpeechStarted()
-                        Log.audio.info("vad: speech detected (prob=\(String(format: "%.2f", prob)))")
+                        LogStream.shared.log("speech detected (prob=\(String(format: "%.2f", prob)))", source: .vad)
                     }
                     consecutiveSilenceFrames = 0
                 } else if heardSpeech {
                     consecutiveSilenceFrames += 1
                     if consecutiveSilenceFrames >= silenceFramesForEndOfTurn {
-                        Log.audio.info("vad: end-of-turn (\(consecutiveSilenceFrames) silence frames, ~\(consecutiveSilenceFrames * vadFrameMs) ms)")
+                        LogStream.shared.log("end-of-turn (\(consecutiveSilenceFrames) silence frames, ~\(consecutiveSilenceFrames * vadFrameMs) ms)", source: .vad)
                         return utterance
                     }
                 }
@@ -317,7 +352,7 @@ public actor ConversationCoordinator {
 
             // Pre-speech idle timeout: no speech detected within N seconds.
             if !heardSpeech, Date().timeIntervalSince(utteranceStarted) >= sessionIdleTimeoutSec {
-                Log.audio.info("captureUtterance: idle timeout after \(bufferCount) buffers, \(utterance.count) samples")
+                LogStream.shared.log("idle timeout after \(bufferCount) buffers, no speech detected", level: .warn, source: .audio)
                 return nil
             }
         }
