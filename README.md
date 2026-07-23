@@ -10,25 +10,7 @@ VoicePOC is a standalone, local-first conversation loop engineered for macOS App
 
 VoicePOC operates as a 4-stage pipeline running local models on the Apple Neural Engine and GPU:
 
-```mermaid
-graph LR
-    subgraph Audio Capture
-        Mic["Microphone Stream (AVAudioEngine)"] --> VAD["Silero VAD (ONNX Runtime)"]
-    end
-
-    subgraph Speech Recognition
-        VAD --> STT["WhisperKit (Apple Neural Engine)"]
-    end
-
-    subgraph LLM Reasoning
-        STT --> LLM["Ollama Local IPC (Llama 3 / Mistral)"]
-    end
-
-    subgraph Speech Synthesis
-        LLM --> TTS["AVSpeechSynthesizer / Orpheus"]
-        TTS --> Speaker["Audio Output"]
-    end
-```
+![VoicePOC Local Audio Pipeline & System Topology](docs/architecture.png)
 
 1. **Voice Activity Detection (VAD)**: Continuous low-power audio monitoring using Silero VAD over `onnxruntime` to filter ambient noise before triggering speech recognition.
 2. **Speech-to-Text (STT)**: High-speed local speech recognition utilizing WhisperKit compiled directly for Apple Silicon hardware acceleration.
