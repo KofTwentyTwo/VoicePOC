@@ -1,0 +1,16 @@
+name: build
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+jobs:
+  macos:
+    uses: self:KofTwentyTwo/ci-workflows/.gitea/workflows/macos.yaml@native-workflows
+    secrets: inherit
+    with:
+      commands: |
+        bash scripts/fetch-models.sh
+        swift build
+        swift test
+        xcodegen generate
+        xcodebuild -quiet -project VoicePOC.xcodeproj -scheme VoicePOCApp -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
